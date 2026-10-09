@@ -8,18 +8,22 @@ Status: Draft
 Type: Standards Track
 Category: Core
 Created: 2026-05-14
-Updated: 2026-10-08
+Updated: 2026-10-09
 Requires: —
 Replaces: N/A
 ```
 
-> **Editor's revision note (Revision 2, 2026-10-08).** This revision incorporates the editorial and technical review of PR #72. Every change is enumerated in §19 (Changelog). Normative requirements live in §4 (Specification) and §§12–15; discussion of the open community debate about the *pace* of migration is confined to §1.5 and §18 and does not alter the specification. The parameter tables in §4.1 are the single source of truth for algorithm identifiers and sizes.
+ **Editor's revision note (Revision 7, 2026-10-09).** This revision promotes the cross-family (lattice + hash) hybrid from a design option to a **MUST for consensus, bridge, and admin keys** (§4.1.4), and propagates the consequences: the PQ Key Registry now stores a two-key **bundle** for such addresses (§4.5), the consensus scheme is a required lattice+hash pair rather than hash-first-with-fallback (§4.7), and the §13 bandwidth/gas budgets reflect the added lattice half. Every change is enumerated in §19 (Changelog).
 
 ## Abstract
 
 This IoTeX Improvement Proposal (IIP) specifies a comprehensive, phased migration of the IoTeX blockchain from quantum-vulnerable elliptic-curve cryptography (secp256k1/ECDSA) to NIST-standardized post-quantum cryptographic (PQC) algorithms. The proposal draws on published research and migration frameworks from Ethereum, Bitcoin (BIP-361 and Chaincode Labs), Sui, the Quantum Resistant Ledger (QRL), Google Quantum AI, the Coinbase Independent Advisory Board, Meta, and Paradigm, synthesizing their findings into a specification tailored to IoTeX's Roll-DPoS consensus, 5-second block time, 24-delegate architecture, EVM compatibility, and DePIN ecosystem.
 
 The migration proceeds across five phases (2026–2033) and introduces: a PQ signature verification precompile; an EIP-2718-compatible PQ-authenticated transaction type; a PQ Key Registry; consensus-layer dual-signing with PQ checkpoint attestations; zkSTARK-based migration proofs for hidden-key accounts; a hash-hidden ("bunker") address strategy for accounts whose public keys are not yet exposed; the iPACT address-control timestamp scheme for pre-committed rescue; a five-level IoTeX PQC Maturity Model with on-chain metrics (§7); protocol guardrails that prevent new quantum-vulnerable deployments (§8); a quantum-milestone-triggered acceleration mechanism mapped to observable milestones (§9); and a cryptographic-agility framework with an explicit re-parameterization trigger (§4.11).
+
+The consensus layer is specified **hash-based-first** (§4.7), reflecting the guidance that the highest-value, most-exposed signatures should avoid structured assumptions, and the acceleration mechanism (§9) is triggered by classical/AI cryptanalysis as well as by quantum-hardware milestones. BLS aggregation (IIP-52) is explicitly positioned as a classical-era transitional optimization (§3.12).
+ The ioTube cross-chain bridge — the ecosystem's largest single pool of locked value — is addressed as a front-loaded migration target (§4.14), covering witness keys, the contract upgrade authority, and on-chain verification on both local and remote chains.
+The migration additionally **requires hybrid-robust signatures (cross-family lattice + hash) for consensus, bridge, and admin keys** (§4.1.4) — independent assumptions combined so that no single break can compromise the highest-value keys — and specifies a **pre-staged recovery mode** (§6.4) so that a crisis response does not begin from zero.
 
 Upon completion, all IoTeX transactions, consensus attestations, and DePIN device identities will be secured exclusively by post-quantum cryptographic algorithms, achieving the highest maturity level (PQ-Enabled) before the projected arrival of cryptographically-relevant quantum computers (CRQCs).
 
@@ -44,6 +48,8 @@ Following the taxonomy from [Google Quantum AI's whitepaper](https://quantumai.g
 * **On-Setup Attacks:** These attacks target fixed public parameters. IoTeX's current protocol does not use trusted setups or pairing-based data availability sampling, making this vector less relevant at present. However, future integration with zk-rollup Layer-2 solutions or verifiable compute systems could introduce this risk.
 
 * **Consensus-Layer Attacks:** These attacks target the 24 Roll-DPoS delegates. If a CRQC can derive delegate signing keys, it can produce valid block proposals, attestations, and governance votes, enabling chain reorganizations or protocol manipulation.
+
+* **Bridge-Layer Attacks (ioTube):** These attacks target the cross-chain bridge connecting IoTeX to Ethereum, BNB Smart Chain, Polygon, Base, and Solana. Bridge witness keys sign continuously and publicly, so they enjoy none of the §2.6 hash-hiding protection; a compromised admin/upgrade key can bypass signature checks entirely (as in the February 2026 ioTube incident). A single forged authorization drains locked reserves, making the bridge the highest-value at-rest target on the chain.
 
 * **DePIN-Specific Attacks:** These attacks target long-lived device identities and data provenance proofs. IoT devices may remain operational for 10–20 years, which is well into the CRQC era. Device key compromise enables data falsification, unauthorized device impersonation, and fraudulent machine-to-machine payments.
 
@@ -75,6 +81,10 @@ The current public debate (Drake's "bunker mode" call for maximal acceleration a
 
 1. **Hash-hidden addresses (§2.6)** are supported as a first-class, zero-cryptography-risk defensive posture, independent of any protocol change.
 2. **The hash-based fallback is elevated to a co-primary, not a last resort (§4.1, §4.11):** SLH-DSA is offered as an equal-status option wherever signature size is tolerable, so that a deployer who wishes to avoid lattice assumptions entirely can do so without waiting for a protocol change. See §4.13 (Rationale).
+
+A break of elliptic-curve or lattice hardness need not come from a quantum computer at all: it could arrive as a classical algorithmic result (a faster-than-Pollard-ρ ECDLP algorithm, or a large downward revision of lattice core-SVP estimates) with no hardware precursor to observe. This IIP therefore defines **non-quantum triggers** in §9.2 alongside the quantum-hardware milestones, and treats them as equally actionable.
+
+A second, faster-moving version of this debate concerns **AI-accelerated classical cryptanalysis** — the possibility that a mathematical breakthrough (not a quantum computer) allows ordinary computers to compute discrete logarithms. This would present no hardware precursor and could arrive as a paper, not an announcement (the "mathocalypse"). Lindell's counter-argument is material and is recorded here for balance: elliptic-curve cryptography has seen no meaningful algorithmic progress in 30 years (the best known attack on a 256-bit curve remains generic ~2^128 work), whereas factoring, hash cryptanalysis, and lattice algorithms *have* seen progress (Lindell cites cryptanalytic advances on the lattice signature candidate HAWK). This IIP does not adjudicate the debate. It adopts the one response on which both sides agree: **combine independent assumptions (hybrid-robust signatures, §4.1.4), so that a break of any single assumption family does not compromise high-value keys.**
 
 ## 2. Threat Model and Risk Assessment
 
@@ -113,12 +123,16 @@ The IoTeX components vulnerable to quantum computers are summarized below. "Like
 | **Delegate signing keys** | ECDLP via Shor's | At-rest | High | High | **High** |
 | **Smart contract admin keys** | ECDLP via Shor's | At-rest | High | High | **High** |
 | **DePIN device keys** | ECDLP via Shor's | At-rest | High | High | **High** |
+| **ioTube witness keys** | ECDLP via Shor's | At-rest | High | High | **High** |
+| **ioTube admin/upgrade keys** | ECDLP via Shor's | At-rest | High | High | **High** |
 | **Keccak-256 addresses** | Grover's (preimage) | Brute-force | Low | High | Low |
 | **SHA-256 (Merkle trees)** | Grover's (collision, BHT) | Collision | Medium | Medium | Medium |
 | **TLS/P2P networking** | ECDH key exchange | Harvest-now | Medium | Medium | Medium |
 | **Lattice-based primitives (proposed)** | Unknown structure exploitation | AI-accelerated cryptanalysis | Medium | High | **Medium–High** |
 
 The final row is new in this revision and is intentional: per §1.5, lattice-based post-quantum primitives are treated as carrying a *concrete-security* risk (not a break) that must be managed through parameter sizing and agility, which is why §4.1 sets a Category-3 floor and §4.11 defines a re-parameterization trigger.
+
+The delegate-signing-key row above is mitigated by the hash-based-first consensus design of §4.7: once consensus migrates (end of Phase 2), the delegate keys are protected by hash-only assumptions and the lattice row no longer applies to them.
 
 ### 2.4 Quantitative Exposure Analysis
 
@@ -225,16 +239,17 @@ Meta's [engineering blog](https://engineering.fb.com/2026/04/16/security/post-qu
 * IoTeX uses secp256k1/ECDSA, not EdDSA, so the seed-based DMS approach is not directly applicable. The mnemonic-based approach (proving knowledge of a BIP-39 mnemonic) remains viable for HD wallets following the IoTeX/pQCee construction. For non-mnemonic accounts (e.g., HSM-based institutional custody), the Kiraz–Kardas dual-path framework is more appropriate — subject to the T-break caveat in §3.5.
 * The dual-path approach of Kiraz and Kardas is directly applicable: IoTeX accounts that have transacted (revealed keys) follow Scenario A; accounts that have only received (hidden keys) follow Scenario B. The Ethereum-specific STARK circuit design can be adopted with minimal modification for IoTeX's Keccak-256 address derivation.
 * The "private incentive" model in BIP-361 (a clear deadline to motivate migration) is applicable to IoTeX but must be calibrated to IoTeX's governance model (24 delegates, community voting) and the DePIN device lifecycle.
-* **New in this revision:** the EF's hash-based lean path, Drake's hash-only argument, and Buterin's lattice-parameter warning all point the same way — treat the hash-based option as co-primary, and treat lattice parameter sizes as provisional and revisable. This is reflected in §4.1, §4.11, and §4.13.
+* **New in this revision:** the EF's hash-based lean path, Drake's hash-only argument, and Buterin's lattice-parameter warning all point the same way — treat the hash-based option as co-primary, and treat lattice parameter sizes as provisional and revisable. This is reflected in §4.1, §4.11, §4.13, and §4.7.
+* **BLS is a dead end for PQ purposes.** IIP-52 (BLS signature aggregation, shipped with the Zanzibar hard fork) compresses block signatures using pairing-based cryptography, which is **not** quantum- or AI-resistant. IIP-52 and IIP-64 are not in conflict provided BLS is understood as a *classical-era compression optimization*: it reduces today's block-signature size, and its role is superseded by the PQ consensus design of §4.7. Any BLS deployment SHOULD be structured so that the aggregated attestation can be replaced without a further address/format migration.
 
 ### 3.13 Comparative Summary
 
 | **Dimension** | **Ethereum (EF)** | **Bitcoin (BIP-361)** | **IoTeX & pQCee** | **Sui** | **Kiraz-Kardas** | **QRL** | **This IIP** |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **Signature Scheme** | leanXMSS/WOTS (lean) + Falcon/ML-DSA/SLH-DSA (evaluating) | ML-DSA (proposed) | Scheme-agnostic (ZKP-based) | EdDSA DMS + PQ-NIZK | ML-DSA + zkSTARK | XMSS → SLH-DSA | ML-DSA-65 + SLH-DSA (co-primary) + zkSTARK |
+| **Signature Scheme** | leanXMSS/WOTS (lean) + Falcon/ML-DSA/SLH-DSA (evaluating) | ML-DSA (proposed) | Scheme-agnostic (ZKP-based) | EdDSA DMS + PQ-NIZK | ML-DSA + zkSTARK | XMSS → SLH-DSA | ML-DSA-65 (users); hash-based-first consensus; zkSTARK migration |
 | **Security Level Target** | Not stated | Not stated | Not stated | Not stated | Not stated | Level 1–5 (per param) | **≥ Category 3 for long-lived keys** |
 | **Migration Model** | Account abstraction (opt-in) | Flag-day sunset (forced) | New tx type + off-chain proof | Seed-based DMS (opt-in) | Dual-path (revealed/hidden) | Hard fork (PQ-native) | Phased hybrid (incentivized) + bunker track |
-| **Consensus Layer** | leanXMSS + SNARK aggregation | N/A (PoW unchanged) | Not addressed | Not addressed | Not addressed | XMSS/SLH-DSA native | ML-DSA-87 delegate keys + registry |
+| **Consensus Layer** | leanXMSS + SNARK aggregation | N/A (PoW unchanged) | Not addressed | Not addressed | Not addressed | XMSS/SLH-DSA native | Hash-based-first (SLH-DSA/XMSS) + registry; ML-DSA-87 fallback |
 | **Backward Compatibility** | High (AA-based) | Moderate (soft fork) | High (new tx type) | High (same address) | High (one-way transition) | Low (new chain) | High (phased, incentivized) |
 | **Aggregation** | SNARK-based (leanVM) | N/A | Recursive zkSTARK | One-time proof | Not addressed | N/A | Recursive zkSTARK + precompile |
 | **ZK Proof System** | General-purpose | zkSTARK (proposed) | SP1/RISC0 zkVM | Ligetron zkVM | SP1 zkVM (STARK-native) | N/A | SP1 zkVM (STARK-native) |
@@ -258,14 +273,15 @@ This floor is set deliberately above the minimum available, because (a) the hori
 
 #### 4.1.2 Supported Algorithms
 
-* **ML-DSA (FIPS 204, Module-Lattice):** the **primary** PQ signature scheme.
+* **ML-DSA (FIPS 204, Module-Lattice):** the **primary lattice-based** PQ signature scheme, used for user transactions and admin keys (the consensus role is specified separately in §4.7, where a hash-based scheme is primary).
   * **ML-DSA-65 (Category 3)** — the default for user transactions. Public key 1,952 B; signature 3,309 B.
-  * **ML-DSA-87 (Category 5)** — REQUIRED for consensus/delegate keys and RECOMMENDED for high-value smart contract admin keys. Public key 2,592 B; signature 4,627 B.
+* **ML-DSA-87 (Category 5)** — REQUIRED as the **lattice half** of the consensus hybrid (§4.7, §4.1.4) and RECOMMENDED for high-value smart-contract admin keys. Public key 2,592 B; signature 4,627 B.
   * **ML-DSA-44 (Category 2)** — MAY be used only for bounded/low-value contexts or explicit compatibility, and MUST be labeled Category 2. Public key 1,312 B; signature 2,420 B.
 * **SLH-DSA (FIPS 205, Stateless Hash-Based):** the **co-primary**, hash-only scheme. SLH-DSA relies solely on hash-function security and is offered as an equal-status option, not a fallback, so deployers may avoid lattice assumptions entirely.
   * **SLH-DSA-SHA2-192s (Category 3)** — REQUIRED option for long-lived DePIN device identities and RECOMMENDED where signature size is tolerable. Public key 48 B; signature 16,224 B.
   * **SLH-DSA-SHA2-256s (Category 5)** — OPTIONAL for the most conservative long-horizon identities. Public key 64 B; signature 29,792 B.
   * **SLH-DSA-SHA2-128s (Category 1)** — permitted only for short-lived or size-constrained contexts; MUST be labeled Category 1.
+* **SP 800-230 *Additional SLH-DSA Parameter Sets for Limited-Signature Use Cases* (reserved):** NIST SP 800-230 specifies six additional SLH-DSA parameter sets (security levels 1, 3, and 5) with smaller signatures, at the cost of a **hard limit of 2^24 signatures per signing key**. NIST states these sets are **not approved for general-purpose use** and requires the signer to guarantee the cap is never exceeded. Accordingly they MAY be used only where the ≤2^24-per-key bound is **enforceably capped** and the key is **not used programmatically** (a bot or contract agent can exceed 2^24 within a key's lifetime). They fit **low-count** roles: device identity/certificate signing and, in principle, individual (non-programmatic) user accounts. Algorithm identifiers `0x16`–`0x1B` are **reserved** for these sets; they MUST NOT be activated until the standard is final and the parameters are verified, and activation is a §4.11 re-parameterization event.
 
 > **Correction from Revision 1.** SLH-DSA-128s was described as "the most conservative security assumption." That was a category error: for a conservative posture the correct choice is a *larger* parameter set (192s/256s), not the smallest. Category 1 is now explicitly excluded from long-lived keys.
 
@@ -273,7 +289,7 @@ This floor is set deliberately above the minimum available, because (a) the hori
 
 * **FN-DSA / FALCON (FIPS 206 draft):** **NOT active in this IIP.** It requires complex floating-point arithmetic and Gaussian sampling, which is unsuitable for IoT devices. The identifier `0x80` is **reserved** to prevent future collision; it MUST NOT be accepted by the precompile until a future IIP activates it.
 * **SQIsign:** compact signatures but immature and computationally expensive; not supported.
-* **XMSS (stateful):** battle-tested (QRL) but operationally complex for a general-purpose chain; not supported as a primary scheme.
+* **XMSS / leanXMSS (stateful hash-based):** stateful, so it requires disciplined per-key state management, but it is the most conservative *and* most size-efficient option for the **consensus** role, where keys are few, professionally operated, and signing is frequent (§4.7). It is supported for consensus (and only consensus) subject to the state-management requirements of §4.7; it is NOT offered to general user wallets, where state-loss risk is unacceptable.
 
 #### 4.1.3 Canonical Algorithm-Identifier Table
 
@@ -283,7 +299,7 @@ This table is the **single source of truth** for algorithm identifiers and sizes
 | --- | --- | --- | --- | --- | --- | --- |
 | ML-DSA-44 | 0x01 | 2 | 1,312 | 2,420 | 2.16.840.1.101.3.4.3.17 | Active (bounded/low-value only) |
 | ML-DSA-65 | 0x02 | 3 | 1,952 | 3,309 | 2.16.840.1.101.3.4.3.18 | Active (default) |
-| ML-DSA-87 | 0x03 | 5 | 2,592 | 4,627 | 2.16.840.1.101.3.4.3.19 | Active (consensus/admin) |
+| ML-DSA-87 | 0x03 | 5 | 2,592 | 4,627 | 2.16.840.1.101.3.4.3.19 | Active (admin; consensus fallback) |
 | SLH-DSA-SHA2-128s | 0x10 | 1 | 32 | 7,856 | 2.16.840.1.101.3.4.3.20 | Active (short-lived only) |
 | SLH-DSA-SHA2-128f | 0x11 | 1 | 32 | 17,088 | 2.16.840.1.101.3.4.3.21 | Active (short-lived only) |
 | SLH-DSA-SHA2-192s | 0x12 | 3 | 48 | 16,224 | 2.16.840.1.101.3.4.3.22 | Active (device identity) |
@@ -291,8 +307,27 @@ This table is the **single source of truth** for algorithm identifiers and sizes
 | SLH-DSA-SHA2-256s | 0x14 | 5 | 64 | 29,792 | 2.16.840.1.101.3.4.3.24 | Active (optional, max) |
 | SLH-DSA-SHA2-256f | 0x15 | 5 | 64 | 49,856 | 2.16.840.1.101.3.4.3.25 | Active (optional, max) |
 | FN-DSA-512 | 0x80 | (pending FIPS 206) | 897 | 666 | (pending) | **Reserved — not active** |
+| SLH-DSA limited-use (SP 800-230) | 0x16–0x1B | 1/3/5 | (per set) | (smaller; per set) | (pending SP 800-230 final) | **Reserved — not active** |
+| XMSS / leanXMSS (consensus) | 0x30–0x3F | 3/5 | (per params) | (~2–3 KiB; per params) | (RFC 8391 OIDs) | **Reserved pending §4.7 decision** |
 
 > ML-DSA-65 signature size is **3,309 bytes** (FIPS 204 Table 2), correcting the "3,293 bytes" figure used in Revision 1.
+
+#### 4.1.4 Multi-Assumption (Hybrid-Robust) Signatures
+
+This IIP distinguishes two hybrids, which MUST NOT be conflated:
+
+* **Classical+PQ hybrid (transitional).** A signature requiring *both* a secp256k1 ECDSA signature and one PQ signature (Type `0x05`, Phase 2, §4.4). This protects against a break of *either ECDSA or that single PQ scheme*, but not against a break of both.
+* **Cross-family PQ hybrid (hybrid-robust).** A signature requiring **two PQ signatures from different assumption families** — e.g., ML-DSA (lattice) **and** SLH-DSA (hash). This is robust to a break of either family, including the AI-era scenario in which a *lattice* scheme is the one that falls while hash-based schemes stand.
+
+Per the current cryptographic consensus (Lindell), the following high-value key classes **MUST** use a hybrid-robust construction — a **2-of-2 (or 3-of-3) combination across independent assumptions** — and this is a normative requirement, not an option:
+
+* **Consensus/delegate keys — MUST.** Each delegate key MUST be a 2-of-2 hybrid of a **hash-based** and a **lattice** scheme (e.g., SLH-DSA-192s or XMSS **and** ML-DSA-87). Both halves MUST verify on every proposal and attestation (§4.7).
+* **Bridge witness and admin/upgrade keys — MUST.** Every ioTube witness key and every contract admin/upgrade key MUST be hybrid-robust (§4.14); the bridge is the highest-value target and cannot tolerate a single-assumption failure.
+* **Smart-contract admin keys — MUST** be hybrid-robust wherever they control high-value contracts; a single-assumption admin key MUST NOT be used for such contracts.
+* **User-transaction keys — MAY** remain single-scheme (ML-DSA-65) where a hybrid's size cost is prohibitive, but SHOULD migrate to a hybrid for large balances.
+* The classical+PQ hybrid (§4.4) is a **floor**, not a substitute for cross-family hybrid-robustness on high-value keys.
+
+Hybrid-robust signatures concatenate signatures and therefore cost size and gas; this MUST be budgeted (§13) and is treated as a deliberate, bounded expense on the small set of high-value keys.
 
 ### 4.2 Domain Separation and Signing Preimages
 
@@ -327,6 +362,17 @@ Every PQ signature in this IIP is computed over an explicitly defined, domain-se
                                 to_bytes(height, 8) || block_hash || state_root ||
                                 tx_root || epoch || validator_set_root )
   ```
+
+* **Bridge authorization (ioTube).** With `src_chain`, `dst_chain`, and `bridge_contract` binding the route:
+
+  ```
+  DOMAIN_BRIDGE = "IoTeX-PQ-Bridge-v1"
+  bridge_digest = Keccak256( bytes(DOMAIN_BRIDGE) || to_bytes(src_chain, 32) ||
+                             to_bytes(dst_chain, 32) || bridge_contract ||
+                             transfer_id || token || to_bytes(amount, 32) || recipient )
+  ```
+
+  The route tuple in the digest prevents replay of a claim across chains, contracts, or tokens (§4.14).
 
 * **Generic precompile use (dapps).** The precompile (§4.3) performs **no implicit domain separation**: callers MUST pass a message whose *first* bytes are a caller-chosen domain tag, and the precompile MUST reject a message shorter than the tag plus a chain-id field. The protocol's own uses above are the reference patterns.
 
@@ -395,6 +441,8 @@ Following [EIP-2718](https://eips.ethereum.org/EIPS/eip-2718) (Typed Transaction
 4. If all checks pass, the transaction is valid. If the registry shows the sender has an active PQ key and the transaction is a legacy type (`0x00`/`0x01`/`0x02`), validation fails per the Phase 3 rule (§6).
 
 > **Binding invariant (normative).** The registry MUST NOT allow the same `(algorithm_id, pq_public_key)` to be bound to more than one IoTeX address, and MUST NOT allow an address to have more than one active PQ key. Violating this invariant enables address-confusion and replay-style attacks.
+
+> **Hybrid key bundles (Revision 7).** A hybrid-robust key (§4.1.4) is a *pair* of keys from different families. For the key classes where a hybrid is REQUIRED (consensus, bridge, admin), the registry MUST store a **bundle** — `(lattice_algorithm_id, lattice_pk, hash_algorithm_id, hash_pk)` — bound to a single address, and MUST require **both** components to verify. The binding invariant above applies to the bundle as a whole: no two addresses may share a bundle, and a bundle's components MUST NOT be usable independently of each other.
 
 ### 4.5 PQ Key Registry
 
@@ -484,29 +532,47 @@ The defensive posture for currently-safe accounts is specified in §2.6. Normati
 
 ### 4.7 Consensus Layer: Delegate PQ Key Migration
 
-IoTeX's Roll-DPoS consensus with 24 delegates simplifies consensus PQ migration compared to Ethereum's hundreds of thousands of validators:
+IoTeX's Roll-DPoS consensus with 24 delegates simplifies consensus PQ migration compared to Ethereum's ~1 million validators — and, unlike user wallets, it is the one place where a **hash-based scheme is both feasible and preferable**.
 
-* **Phase 1 — PQ Key Registry for Delegates.** Each delegate registers a PQ public key in a dedicated delegate registry contract. Registration requires both the delegate's current secp256k1 signing key and the new PQ key, or (for new delegates) the native-PQ path. **ML-DSA-87 (Category 5) is REQUIRED for delegate keys** (§4.1.1).
-* **Phase 2 — Dual-Signed Blocks.** Block proposals include both ECDSA and PQ signatures from the proposing delegate; attestations from other delegates include both signature types. Clients MUST verify both. During this phase, block *integrity* is PQ-protected, but delegate *identity* still depends on the ECDSA half until Phase 3.
-* **Phase 3 — PQ-Only Consensus.** After a governance-approved activation height, only PQ-signed block proposals and attestations are accepted; ECDSA-only delegates are excluded from the active set.
+Revision 3 made a hash-based scheme the consensus default; **Revision 7 requires a cross-family hybrid (hash + lattice) for consensus keys (§4.1.4), so that a break of either family alone cannot compromise a delegate key.** The lattice half (ML-DSA-87) is therefore a *required component* of the hybrid, not a fallback.
 
-**Bandwidth and storage sizing (new in this revision).** With 24 delegates at ML-DSA-87:
+**Signing frequency and the stateful-signature hazard (must be engineered, not assumed).** A common assumption — "signed once per epoch, like Ethereum's lean design" — does **not** hold for IoTeX. At a 5-second block time a single delegate may sign on the order of 17,280 times per day (≈ 6.3 million per year). This has two consequences:
+
+* **Stateless (SLH-DSA):** no state hazard, but each signature is 16,224 B at SLH-DSA-SHA2-192s (§4.1.3). This makes per-block bandwidth the binding constraint (see below), and motivates aggregation.
+* **Stateful (XMSS / leanXMSS):** signatures are far smaller (on the order of 2–3 KiB for typical parameters; to be confirmed against the final leanSig specification), but **reusing a one-time-signature index is catastrophic** — it discloses the private key. A stateful consensus scheme MUST therefore (a) size its hypertree (h) for years of 5-second signing, (b) hold the monotonic index inside an HSM/secure element, and (c) define an explicit disaster-recovery procedure that forbids signing from a rolled-back state. These requirements MUST be validated before any stateful scheme is activated.
+
+**Scheme selection (REQUIRED — cross-family hybrid).** Delegate/consensus keys MUST use a **cross-family hybrid (lattice + hash)** (§4.1.4): every proposal and attestation MUST carry **both** a lattice signature (ML-DSA-87) and a hash-based signature (SLH-DSA-192s, or an audited XMSS/leanXMSS with the state-management controls above), and **both MUST verify** for the attestation to be accepted. The hash-based half is stateless (SLH-DSA) by default, or stateful (XMSS) where the state controls can be guaranteed.
+
+* **Phase 1 — PQ Key Registry for Delegates.** Each delegate registers a **cross-family hybrid key bundle** (lattice + hash, §4.5) in a dedicated delegate registry contract.
+* **Phase 2 — Dual-Signed Blocks.** Block proposals include both ECDSA and PQ signatures; attestations from other delegates include both signature types. Clients MUST verify both, and an attestation is accepted only if **both** are valid — so compromise of a single key is insufficient (the classical half remains a residual dependency until Phase 3; see §12.6).
+* **Consensus PQ-only transition (end of Phase 2, per §6.1).** After a governance-approved activation height, only PQ-signed block proposals and attestations are accepted; ECDSA-only delegates are excluded from the active set. (This is the *consensus* sense of "PQ-only". The account-level sense — `activatePQOnly`, §4.5 — and the execution-layer sense — PQ-only transactions with zero-filled legacy fields, §4.4 — are distinct and occur on their own schedules.)
+
+**Bandwidth and storage sizing (revised).**
 
 ```
-per-block attestation payload  = 24 × 4,627 B      = 111,048 B ≈ 108 KiB
-per-day   (5 s blocks, 17,280) = 111,048 × 17,280  ≈ 1.92 GB/day
-per-year                            ≈ 700 GB/year (attestations only)
+Scheme                    per-block (24 delegates)   per-day        per-year
+ML-DSA-87                 111,048 B  (108 KiB)       1.92 GB/day    ~700 GB/yr
+SLH-DSA-SHA2-192s         389,376 B  (380 KiB)       6.73 GB/day    ~2.46 TB/yr
+XMSS/leanXMSS (~2.5 KiB, ESTIMATE)  ~60,000 B (est.)  (~59 KiB)  ~1.04 GB/day  ~380 GB/yr
+Hybrid (hash+lattice, MUST) ~468,800 B (~458 KiB)      ~8.1 GB/day    ~2.96 TB/yr
 ```
 
-A delegate that cannot yet run ML-DSA-87 and falls back to SLH-DSA-192s (16,224 B) yields 24 × 16,224 = 389,376 B/block ≈ **6.7 GB/day**, which is why the IIP (a) RECOMMENDS ML-DSA for the consensus hot path, and (b) treats aggregation as an optimization to be introduced in Phase 2 rather than a prerequisite. Node operators MUST plan storage and archival policy (pruned attestation retention, light-client attestation) accordingly.
+The trade-off is explicit: a stateless hash scheme (SLH-DSA) is the safest but heaviest; a stateful hash scheme (XMSS) is both safest and lightest but requires state discipline; ML-DSA-87 is lightest-but-one and carries the lattice-assumption risk. Because even the lightest option is ~60–110 KiB/block, **STARK-based signature aggregation (leanMultisig-style) is promoted from an optional Phase 2 optimization to a Phase 2 requirement** for whichever hash scheme is selected. Node operators MUST plan storage and archival policy (pruned attestation retention, light-client attestation) for the selected scheme.
 
-With only 24 delegates, native BLS-style aggregation is not required. Individual ML-DSA-87 signatures cost ~108 KiB/block, manageable within IoTeX's block capacity. For future scalability (e.g., larger delegate sets), STARK-based aggregation following the EF's leanMultisig approach MAY be adopted.
+> **Cost of the hybrid requirement.** The mandatory cross-family hybrid roughly **doubles** consensus-attestation size versus the SLH-DSA-only option (SLH-DSA-192s 16,224 B + ML-DSA-65 3,309 B ≈ 19,533 B per signature × 24 ≈ 458 KiB/block, ≈ 8.1 GB/day, ≈ 2.96 TB/yr). This is the price of removing single-family risk from the delegate set; it makes the §4.7 aggregation requirement (native STARK, PQ-sound) more, not less, important.
+
+> **PQ-soundness of the consensus aggregation path (clarified in Revision 4).** The consensus aggregation proof is verified by consensus nodes using a **native STARK verifier (no pairing wrapping)** — not the on-chain contract verifier discussed in §4.9. The consensus path is therefore PQ-sound by construction. The §4.9 Option 1 / Option 2 distinction applies only to the on-chain *migration/rescue* verifier.
+
+**BLS / IIP-52 transition.** IIP-52 (BLS signature aggregation, Zanzibar hard fork) reduces *classical* block-signature size by compressing signatures into a single 96-byte aggregate, but BLS is pairing-based and therefore neither quantum- nor AI-resistant. BLS is adopted as a **classical-era transition optimization**, not an end-state; the aggregation role is superseded by the PQ consensus design above. Implementations SHOULD keep the attestation format forward-compatible so the transition from BLS aggregation to PQ attestations does not require a further address-format change.
 
 ### 4.8 DePIN Device Identity Migration
 
 A specialized migration path for IoT device identities in the DePIN ecosystem:
 
-* **Device PQ Key Provisioning.** New devices SHOULD be provisioned with PQ key pairs at manufacture, using **SLH-DSA-SHA2-192s (Category 3, hash-only)** where signature size is tolerable, or ML-DSA-65 otherwise. Devices MUST be registered via `registerNativePQ` (§4.5, Path 3); they have no secp256k1 key and MUST NOT be required to produce an ECDSA signature to bootstrap.
+* **Device PQ Key Provisioning.** New devices SHOULD be provisioned with PQ key pairs at manufacture. The scheme MUST be chosen by **signing role**, not by a single device-wide default:
+  * **Identity/certificate signing** (low-count — a device identity or certificate is signed rarely, well under the 2^24-per-key cap): the **SP 800-230 limited-use sets** (§4.1.2) when final, otherwise **SLH-DSA-SHA2-192s (Category 3, hash-only)**.
+  * **Data signing** (high-count — telemetry, attestations, machine-to-machine authorizations, potentially exceeding 2^24 over a device's life): **SLH-DSA-SHA2-192f** (2^64 capacity, faster than the `s` variant) or a **stateful WOTS/XMSS** scheme with device-side state discipline where the firmware can guarantee it. The **SP 800-230 limited-use sets MUST NOT be used here**, because high-frequency signing would exhaust their 2^24-per-key limit.
+  Devices MUST be registered via `registerNativePQ` (§4.5, Path 3); they have no secp256k1 key and MUST NOT be required to produce an ECDSA signature to bootstrap.
 * **Legacy Device Migration.** Existing devices with secp256k1 keys register PQ keys via a TEE-assisted proving service. The device authenticates to the TEE via its legacy key, the TEE generates a PQ key pair and a zkSTARK migration proof, and the proof is submitted to the PQ Key Registry on behalf of the device. Because the legacy key is used here, this path is **T-governance-only** (§2.2); devices SHOULD complete migration and iPACT commitment (§4.10) as early as practical.
 * **Lightweight Verification.** Resource-constrained IoT devices that cannot perform PQ signature verification locally MAY delegate verification to trusted gateway nodes holding PQ-verified certificates, following the IoTeX W3bstream off-chain compute model.
 
@@ -514,7 +580,12 @@ A specialized migration path for IoT device identities in the DePIN ecosystem:
 
 ### 4.9 zkSTARK Proof System for Migration
 
-Following the IoTeX/pQCee and Kiraz–Kardas frameworks, the migration proof system uses SP1 (Succinct's STARK-native zkVM) to generate proofs that remain entirely within the STARK domain (avoiding a quantum-vulnerable Groth16 final recursion step).
+BN254 pairings are neither quantum- nor AI-resistant, and BN254 offers only ~100-bit classical security as well, further unsuited to long-term use.
+
+Two deployment options are therefore specified, and the verifier choice MUST be stated explicitly rather than implied:
+
+* **Option 1 — Native STARK verification (T-break-sound).** The on-chain verifier is a dedicated **FRI/STARK verification precompile** that checks the native STARK proof directly, with no pairing-based wrapping. This is the only fully post-quantum option. Its gas cost is higher than the ~200,000–500,000 figure assumed in Revision 2 and MUST be re-benchmarked (§13.3).
+* **Option 2 — Wrapped verification (T-governance-only).** If the SP1 Solidity (Groth16/BN254) verifier is used for the interim, the migration-proof path MUST be labeled **T-governance-only** (§2.2) and MUST be replaced by Option 1 before T-break. Until that replacement ships, the IIP MUST NOT claim the migration path is "quantum-safe end to end."
 
 **Path A — Address-binding circuit (T-governance-only).** Adapted from Kiraz–Kardas §6.2:
 
@@ -541,7 +612,7 @@ Constraints:
 
 > **Security-critical:** the witness MUST be `ρ`, the value from which `sk` is *derived*, and MUST NOT be `sk` itself. If `sk` is the witness, the circuit is T-governance-only (a CRQC derives `sk` and satisfies it). Implementers MUST verify that the derivation is not invertible in the circuit and MUST NOT accept any structure in which `sk` alone suffices. It is RECOMMENDED that this circuit be restricted to derivation schemes (e.g., hardened BIP-32) whose preimage remains hidden after `sk` is known, and this SHOULD be documented per wallet type.
 
-Multiple migration proofs MAY be aggregated via tree-based recursive STARK aggregation, reducing on-chain verification cost. A batch of N proofs aggregates into a single proof of approximately constant size (~1.8 MB for SP1 compressed). A STARK verification contract is deployed on IoTeX, accepting the proof, public inputs, and verification key and returning a boolean. Verification gas is provisionally ~200,000–500,000 gas depending on proof parameters (§4.3 and §13).
+Multiple migration proofs MAY be aggregated via tree-based recursive STARK aggregation, reducing on-chain verification cost. A batch of N proofs aggregates into a single proof of approximately constant size (~1.8 MB for SP1 compressed). On IoTeX, the verifier is either the native FRI/STARK verification precompile (Option 1) or the wrapped SP1 Solidity verifier (Option 2), per the corrected analysis above; the chosen verifier, and its T-break soundness, MUST be recorded in the deployment specification. Verification gas for Option 1 is to be re-benchmarked and is expected to exceed the ~200,000–500,000 figure carried from Revision 2 (§13.3); Option 2's gas is the wrapping-based figure but is not T-break-sound.
 
 ### 4.10 iPACT: IoTeX Provable Address-Control Timestamps
 
@@ -621,10 +692,13 @@ Cryptographic agility is a first-class design principle. The precompile supports
 
 Agility is given teeth by an explicit **re-parameterization procedure**:
 
-* **Trigger.** A re-parameterization IIP MUST be opened within 90 days if either (a) published cryptanalysis reduces the concrete core-SVP (or equivalent) cost of the deployed parameter set by more than a threshold set by governance (proposed: 32 bits), or (b) NIST issues a revised or superseding specification for a deployed algorithm. The threshold is a governance parameter, not a protocol constant.
-* **Owner.** The 24 delegates MAY propose, but re-parameterization for a *deployed* algorithm REQUIRES a community governance vote (§14); the cryptographic review committee (§7) MUST publish an impact assessment first.
+* **Trigger.** A re-parameterization IIP MUST be opened if any of the following holds: (a) published cryptanalysis reduces the concrete core-SVP (or equivalent) cost of the deployed parameter set by more than a governance threshold (proposed: 32 bits); (b) NIST issues a revised or superseding specification; (c) a classical algorithm materially faster than Pollard-ρ for ECDLP appears (a §9.2 non-quantum trigger); or (d) a structural break of a deployed *assumption family* (not merely a parameter set) becomes credible. The **response deadline is graded, not fixed at 90 days** (corrected in Revision 3): for (a)/(b) the deadline is 90 days; for a structural/assumption-family event (c)/(d) the deadline is **7 days** to convene the Cryptographic Review Committee (§14) and **30 days** to the emergency track (§6.2). A 90-day response is too slow for a structural event.
+* **Owner.** The 24 delegates MAY propose, but re-parameterization for a *deployed* algorithm REQUIRES a community governance vote (§14); the **Cryptographic Review Committee (§14)** MUST publish an impact assessment first.
 * **Dry-run.** The network MUST exercise at least one non-critical algorithm-identifier rotation on testnet before mainnet PQ-only mode activates. Agility that has never been exercised is not agility.
-* **Substitution policy.** In line with §1.5, if concern about lattice assumptions grows, the RECOMMENDED response is (1) increase ML-DSA parameter sizes within the existing precompile, and only then (2) migrate signatures to SLH-DSA; and for hash functions, (1) increase round counts before (2) changing output byte-widths.
+* **Substitution policy (revised in Revision 3).** The correct response depends on the *kind* of progress:
+  * **Gradual weakening** of a parameter set (a few bits of margin lost): increase parameters first, then migrate to SLH-DSA. This is the sequence Revision 2 specified, and it remains correct for incremental progress.
+  * **Structural break** of an assumption family (the AI-era risk): parameter inflation is **not** a reliable remedy, because the improvement may be super-polynomial in the parameter. For **high-value keys** — consensus, contract admin, and **cross-chain bridge / ioTube keys** — the RECOMMENDED response is a **direct assumption-family replacement to hash-based signatures**, not parameter inflation. User-account keys MAY retain the parameters-first order.
+  * **Hash functions:** increase round counts before changing output byte-widths.
 
 ### 4.12 Multisig and Account Abstraction
 
@@ -637,11 +711,38 @@ Contract accounts (Gnosis-Safe-style multisigs, ERC-4337 accounts) hold a substa
 ### 4.13 Rationale
 
 * **Why ML-DSA-65 (not -44) as the user default?** Because the horizon is a decade-plus and lattices carry a *concrete-security* risk (§2.3) that is best managed with headroom; Category 2 is retained only for bounded/low-value contexts. The cost is ~1 KiB more per transaction — far cheaper than a second migration.
-* **Why ML-DSA-87 for consensus/admin?** These keys are few, long-lived, and control the chain; the size premium is immaterial for the value at risk.
+* **Why hash-based for consensus but ML-DSA for users?** Consensus is the highest-value, most-exposed signature and is produced by professional operators with controlled hardware, so the state-management cost of XMSS (or the size cost of SLH-DSA) is worth avoiding a structured assumption. User wallets sign from uncontrolled endpoints, where statefulness is unacceptable and lattice signature sizes are the practical choice.
 * **Why is SLH-DSA co-primary rather than a fallback?** Per §1.5 and §3.1, a deployer may reasonably prefer *no structured assumptions*. Making SLH-DSA an equal-status option lets that deployer act without waiting for a protocol change.
 * **Why not FN-DSA/Falcon?** Floating-point Gaussian sampling and side-channel sensitivity make it a poor fit for IoT and for constant-time client code; it is reserved for a future IIP.
 * **Why not an EdDSA-style seed migration?** IoTeX is secp256k1/ECDSA; the deterministic-seed property that makes Sui's DMS work is absent (§3.4). The mnemonic-preimage circuit (§4.9, Path B) is the closest analogue and is explicitly bounded.
 * **Why is there a separate bunker track?** Because it is the only defensive measure that is (a) free, (b) protocol-independent, and (c) effective specifically for the largest, most-exposed holders, who are also the ones the ecosystem cannot afford to lose. Round-efficiency of a migration is measured in *value protected per unit of change*, and the bunker track dominates on that metric.
+
+### 4.14 Cross-Chain Bridge (ioTube) PQC Migration
+
+ioTube is IoTeX's multi-chain bridge, connecting IoTeX to Ethereum, BNB Smart Chain, Polygon, Base, and Solana. It holds the largest single pool of value in the IoTeX ecosystem and is therefore the highest-value at-rest target covered by this IIP. A bridge is also the least forgiving component: a forged cross-chain authorization does not degrade gracefully — it drains locked reserves in a single transaction.
+
+**Why the bridge is a first-order risk, not an appendix.** Three properties compound:
+
+1. **Value concentration.** The `TokenSafe` reserves and `MintPool` authority back every wrapped asset; one successful forgery can move the entire pool.
+2. **At-rest exposure by construction.** Witness/validator keys must be online to observe and attest to cross-chain events, and their signatures (and hence public keys) are published with every transfer. The §2.6 hash-hidden ("bunker") posture is unavailable to a bridge signer.
+3. **Long-lived authority.** The admin/upgrade key that controls the verification contracts is a single point of failure. The February 2026 ioTube incident was **not** a signature forgery: a compromised owner account of the Ethereum-side Validator contract was used to upgrade the contract to a version that bypassed all signature and validation checks, after which `MintPool` and `TokenSafe` were drained (~$4.4M; 410M CIOTX minted). A post-quantum migration that hardens the witnesses but leaves a lone ECDSA upgrade key would repeat that failure mode over a longer horizon.
+
+**Three key classes to migrate (all REQUIRED before Phase 2):**
+
+These keys MUST migrate to post-quantum signatures and — like delegate keys (§4.7) — MUST use a **cross-family hybrid (lattice + hash)** (§4.1.4), because the bridge is the highest-value target and cannot tolerate a single-assumption failure.
+* **Class 2 — Contract admin/upgrade keys.** The upgrade authority for the bridge contracts (`Validator`, `MintPool`, `TokenSafe`) MUST be migrated to a **post-quantum multisig with a timelock** (extending the post-incident multi-sig + 24-hour timelock hardening to PQ signers), following the §4.12 off-chain-confirmation guidance. A single ECDSA key with upgrade authority MUST NOT exist after Phase 1.
+* **Class 3 — On-chain verification contracts.** `Transfer Validator` and related contracts currently verify witness signatures with `ecrecover` (secp256k1). They MUST add a post-quantum verification path that calls the PQ precompile (§4.3), i.e. the §4.12 `PQVerifierLib` path. Migrating witnesses without migrating the verifier is ineffective: the contract rejects PQ signatures until upgraded, and keeps accepting forgeable ECDSA ones until it is not.
+
+**Cross-chain verification asymmetry (the hard problem).** IoTeX can deploy a PQ precompile; Ethereum, BNB Smart Chain, Polygon, Base, and Solana cannot be assumed to have one. The direction of transfer determines the difficulty:
+
+* **Inbound to IoTeX** (verify a remote-chain event, mint/release on IoTeX): the verifying contract is on IoTeX and can call the PQ precompile. This direction is tractable now and SHOULD migrate first.
+* **Outbound from IoTeX** (verify an IoTeX witness claim, mint/release on a remote chain): the verifying contract is on the remote chain. Options, in order of preference: (a) verify a **native STARK proof** of the witness threshold with a FRI/STARK verifier deployed on that chain (§4.9 Option 1 — PQ-sound, but gas-heavy on e.g. Ethereum); (b) route through a chain that supports PQ verification; or (c) during the residual window, cap outbound value and require the timelocked, multisig admin path. A wrapped (Groth16/BN254) verifier is **not** acceptable for the bridge (§4.9 Option 2), because this is precisely the T-break-critical case.
+
+**Defense in depth (non-cryptographic).** Per-transaction and per-epoch mint/release caps and a circuit breaker SHOULD be enforced at the contract level regardless of signature scheme; they bound the damage of any single failure (including a future cryptographic surprise) and were part of the post-incident hardening.
+
+**Sequencing.** Bridge migration is front-loaded, not deferred: witness keys and the admin/upgrade multisig migrate in **Phase 0–1** (the pool is the largest, most exposed target); the on-chain PQ verification path ships with the Phase 1 precompile for the inbound direction and is a **Phase 2 requirement** for the outbound direction. The bridge MUST NOT be in the "last to migrate" position.
+
+**Domain separation.** Bridge authorization messages MUST be domain-separated and bound to the (source chain, destination chain, contract) tuple so a claim valid on one route cannot be replayed on another; see `DOMAIN_BRIDGE` in §4.2.
 
 ## 5. Technology Stack
 
@@ -651,8 +752,10 @@ Contract accounts (Gnosis-Safe-style multisigs, ERC-4337 accounts) hold a substa
 | --- | --- | --- |
 | ML-DSA | liboqs (Open Quantum Safe) | NIST-aligned, audited, C with Go/Rust bindings |
 | SLH-DSA | liboqs | Same library for consistency |
-| zkSTARK prover | SP1 (Succinct) | STARK-native, Rust, WASM-compatible, no quantum-vulnerable final recursion |
-| zkSTARK verifier (on-chain) | SP1 Solidity verifier | Deployable on EVM-compatible chains |
+| XMSS/leanXMSS (consensus) | audited XMSS implementation + HSM state store | Stateful hash signatures for consensus; RFC 8391; state-management controls per §4.7 |
+| zkSTARK prover | SP1 (Succinct) | STARK-native prover; Rust, WASM-compatible |
+| zkSTARK verifier (on-chain), Option 1 | Native FRI/STARK verification precompile | T-break-sound (no pairing wrapping); higher gas, to be re-benchmarked (§4.9) |
+| zkSTARK verifier (on-chain), Option 2 | SP1 Solidity verifier (Groth16/PLONK over BN254) | Interim only; T-governance-only (§4.9); NOT post-quantum |
 | Hash functions | SHA-256, SHA-512, Keccak-256 | Existing IoTeX hashes; sized per §2.5 |
 | Formal verification | Lean4 / Coq | Following EF's formal-verification approach |
 
@@ -660,7 +763,7 @@ All client-side ML-DSA and SLH-DSA code MUST use constant-time, masked implement
 
 ### 5.2 Client Modifications
 
-* **Transaction pool:** accept and propagate Type `0x05`; validate both PQ and legacy signatures, and enforce the §13 mempool policy, before admission.
+* **Transaction pool:** accept and propagate Type `0x05`; validate both PQ and legacy signatures, and enforce the §12.5 mempool policy, before admission.
 * **Block validation:** verify PQ signatures on proposals and attestations (Phase 2+); reject ECDSA-only blocks after Phase 3 activation.
 * **State management:** integrate PQ Key Registry lookups (including the §4.5 binding invariant) into the transaction-validation pipeline.
 * **P2P networking:** upgrade to PQ-TLS (ML-KEM key encapsulation) for peer connections, following the Open Quantum Safe provider for OpenSSL 3. Note: this protects the *transport*; it is not a substitute for PQ transaction and consensus signatures.
@@ -679,22 +782,39 @@ All client-side ML-DSA and SLH-DSA code MUST use constant-time, masked implement
 | **Phase** | **Time Period** | **Objective** | **Key Deliverables** |
 | --- | --- | --- | --- |
 | **Phase 0: Foundation** | 2026 Q3 – 2027 Q2 | Deploy infrastructure without protocol changes | Publish this IIP and complete review; implement ML-DSA/SLH-DSA in `iotex-core` as an optional module; deploy PQ Key Registry and STARK verifier contracts on mainnet (voluntary registration only); **launch iPACT commitment generation and publish the recommended cutoff** (§4.10); launch TEE proving service; integrate PQ key generation into ioPay (opt-in); formal verification of the PQ precompile; hybrid PQ-TLS; publish DePIN PQ Device Identity Standard; **publish the §2.4 exposure census** |
-| **Phase 1: Precompile Deployment** | 2027 Q3 – 2028 Q2 | Deploy PQ verification as a native protocol capability | Hard fork deploying precompile `0x0B`; enable Type `0x05` (hybrid required); activate registry enforcement for Type `0x05`; all 24 delegates MUST register ML-DSA-87 keys; begin dual-signed block production; gas-subsidy program for migration transactions (first 12 months, subject to §14); ecosystem migration toolkit |
+all 24 delegates MUST register cross-family hybrid (lattice + hash) keys (§4.7);
 | **Phase 2: Hybrid Enforcement** | 2028 Q3 – 2030 Q2 | Make PQ the primary authentication mechanism while retaining compatibility | Soft deadline (2028 Q3): new accounts in official wallets default to PQ-capable; hard deadline (2029 Q3): transactions to PQ-registered accounts MUST use Type `0x05`; consensus transition (2030 Q1): PQ-only consensus, ECDSA-only delegates excluded; deploy recursive STARK aggregation; expand DePIN migration; publish full security audit |
 | **Phase 3: Legacy Sunset** | 2030 Q3 – 2031 Q4 | Restrict and eventually eliminate classical ECDSA | Soft fork (2030 Q3): legacy types accepted only from senders without a registered PQ key; 18-month grace period with aggressive outreach (automated migration, exchange partnerships, device OTA); iPACT rescue and zkSTARK rescue remain open; **governance vote** on unmigrated accounts (preserve / time-locked freeze / burn) per §14 |
 | **Phase 4: PQ-Native** | 2032 Q1 – 2033 | Complete the transition to PQ-only operation | Hard fork (2032 Q1): legacy ECDSA transactions no longer processed; rescue paths remain for late migrants with valid pre-cutoff iPACTs; remove ECDSA from the critical consensus path (retain `ecrecover` only under the §11 deprecation schedule); evaluate STARK aggregation for execution-layer verification; evaluate emerging PQ algorithms via §4.11; publish final migration report |
 
+### 6.1.1 Bridge (ioTube) Sequencing
+
+The bridge migration is front-loaded (§4.14). **Phase 0–1:** migrate witness/validator signing keys to PQ and move the contract admin/upgrade authority to a PQ multisig with a timelock; ship the inbound (verify-on-IoTeX) PQ verification path with the precompile. **Phase 2:** ship the outbound (verify-on-remote-chain) path using a native FRI/STARK verifier, or cap outbound value where no PQ-sound verifier exists; enforce per-transaction and per-epoch caps throughout. The bridge MUST NOT be scheduled after user-account migration.
+
 ### 6.2 Emergency Track
 
-If credible evidence emerges of a CRQC capable of at-rest attacks before Phase 3 completion:
+The emergency track activates on either a quantum trigger (credible evidence of a CRQC capable of at-rest attacks) or a **non-quantum trigger** (a classical/algorithmic break of secp256k1 or of a deployed PQ assumption — see §9.2), before Phase 3 completion:
 
-* **Immediate (within 48 hours):** issue an ecosystem advisory; activate PQ-only processing for all PQ-registered accounts; coordinate emergency key rotation with exchanges and custodians.
+* **Immediate (within 48 hours):** issue an ecosystem advisory; activate PQ-only processing for all PQ-registered accounts; coordinate emergency key rotation with exchanges and custodians. The same 48-hour clock applies to a **non-quantum** trigger, which will typically present as anomalous authorizations from known-exposed accounts rather than as a hardware announcement (§9.2, C4).
 * **Short-term (within 2 weeks):** emergency hard fork requiring PQ authentication for high-value transactions (> 10,000 IOTX); a *gated* hold on accounts with exposed keys that have not registered a PQ key — **the hold MUST be released only by a PQ-sound proof or a pre-cutoff iPACT** (a hold releasable by an ECDSA registration signature is forgeable post-break; see §14); deploy a commit-delay-reveal protocol for legacy transactions.
 * **Medium-term (within 3 months):** accelerate Phase 4; implement the BIP-361-style rescue for all accounts with provable ownership; **explicitly announce that exposed keys are, from this point, unrecoverable by cryptographic means** and that only pre-committed iPACTs survive.
 
 ### 6.3 Dependency Order
 
 Phase 1 depends on the Phase 0 registry and verifier being live and audited; Phase 2's consensus transition depends on delegate key registration completing in Phase 1; Phase 3's sunset depends on the iPACT/rescue contracts being live and the exposure census (§2.4) being published so that the "who is left" population is known. A phase MUST NOT activate if its dependencies are unmet.
+
+### 6.4 Pre-Staged Recovery Mode (proposed)
+
+> **Status: proposed, not yet normative.** This subsection records a mechanism proposed by Haseeb Qureshi ("Cryptographic Recovery Mode") and places it within this IIP's framework. It requires a governance decision (§14) before becoming normative. Contested elements are flagged; this IIP does **not** adopt them silently.
+
+The emergency track (§6.2) assumes a decision can be taken and a fork shipped when a break occurs. If a classical/AI break arrives with no warning (§9.2), that may be too slow. The proposed mechanism pre-stages the response:
+
+* **6.4.1 Pre-staged hash-based backup key.** At a designated protocol upgrade, every address is prompted to register a **hash-based backup key** (e.g., SLH-DSA), creating a mapping `address → backup_pq_key` (§4.5). Initially optional, later possibly required. This is *complementary* to iPACT (§4.10): iPACT proves control of a *legacy* key at a past time; the backup key is a *new* PQ key that can authorize transfers if the legacy key is compromised.
+* **6.4.2 The crisis switch.** A pre-deployed switch forces addresses into recovery mode. **Governance safeguard (this IIP's addition):** the switch MUST NOT be flippable "by signaling alone"; it MUST be gated by a super-majority delegate vote with a published timelock, and MUST be time-limited and reversible by governance (§10). A freely-flippable switch is itself a governance weapon and a centralization risk — the mechanism is only as safe as its activation rule.
+* **6.4.3 Straggler recovery.** For accounts that did not pre-stage a backup key: (a) mnemonic/seed holders can prove it via the §4.9 Path B circuit; (b) never-signed ("bunker") accounts can recover via the address-binding circuit. A **holding-scaled proof-of-work timer** (difficulty growing over time) has been proposed to let owners outrace an attacker; **this IIP flags it as contested** — after a *public* break the attacker can also compute the key, so the contest reduces to a PoW race whose only owner edge is timing, and scaling difficulty *by holdings* makes large accounts *harder* to rescue, which is backwards from the goal of protecting the largest holders. It SHOULD NOT be adopted without further analysis.
+* **6.4.4 Crisis cadence.** The proposer argues that in a crisis "speed beats decentralization." This IIP records the tradeoff but bounds it: any relaxation of governance norms MUST be (a) pre-specified, (b) time-limited, and (c) subject to post-hoc review (§10), so that crisis powers do not become permanent.
+
+**Adopted vs. open.** This IIP adopts the *principle* of a pre-agreed, pre-staged recovery plan. It leaves the switch's activation rule, the straggler mechanics, and the governance cadence to §14 as open questions (§18.12–13).
 
 ## 7. IoTeX PQC Maturity Model
 
@@ -718,27 +838,45 @@ To prevent new quantum-vulnerable deployments as the network migrates:
 * **New contract accounts (Phase 1+):** a protocol-checked advisory (and, by Phase 3, a hard rule for protocol-endorsed templates) SHOULD flag any contract whose access control is ECDSA-only (`ecrecover`, `ecrecover`-based multisig), and the reference module (§4.12) SHOULD be the default template.
 * **Blocked after Phase 3:** the protocol MUST reject a legacy-type transaction from an account with a registered PQ key (already stated in §6). After Phase 4, the protocol MUST reject all legacy-type transactions.
 * **New DePIN devices (Phase 0+):** the DePIN PQ Device Identity Standard MUST require PQ-native provisioning (§4.8); a device shipped after a published date without a PQ identity is out of compliance.
+* **Bridge (Phase 0+):** no bridge contract may retain a single ECDSA upgrade key; bridge witness keys MUST register in the PQ Key Registry, and the transfer-verification contracts MUST expose a PQ verification path (§4.14). New deployments SHOULD enforce per-transaction and per-epoch caps.
 * **Deployment checklist:** new smart contracts that manage value SHOULD use a published "PQ-ready" checklist, and tooling SHOULD warn on `ecrecover` usage.
 
-## 9. Quantum-Milestone-Triggered Acceleration
+## 9. Trigger Framework: Quantum and Non-Quantum Acceleration
 
-The following table maps the Coinbase Independent Advisory Board's four milestones (§3.10) to concrete, pre-specified protocol actions, so that acceleration is triggered by observation rather than improvised.
+Acceleration is triggered by **observation**, and observation now has two independent axes: quantum-hardware milestones (§9.1) and non-quantum (classical or AI-accelerated) cryptanalysis (§9.2). Either axis can trigger the §6.2 emergency track.
+
+### 9.1 Quantum-hardware milestones
+
+The following table maps the Coinbase Independent Advisory Board's milestones M1–M4 (§3.10; M0 is the steady state) to pre-specified actions.
 
 | **Observable milestone** | **Trigger condition** | **Pre-specified IoTeX action** |
 | --- | --- | --- |
 | **M0: No CRQC** | Steady state | Execute the §6.1 phase plan. |
 | **M1: Fault-tolerant two-qubit gates** | Independently confirmed | Complete Phase 0; begin Phase 1 engineering; publish the exposure census. |
 | **M2: Fault-tolerant Shor's factoring (of a small integer)** | Independently confirmed | Jump to Phase 1 precompile deployment; mandate delegate PQ registration; activate the commit-delay-reveal option for high-value legacy transactions. |
-| **M3: Indefinitely stable logical qubits / plausible ECDLP** | Credible expert consensus | Enter the §6.2 emergency track; require PQ authentication for high-value transactions; open the §3.14 rescue paths. |
+| **M3: Indefinitely stable logical qubits / plausible ECDLP** | Credible expert consensus | Enter the §6.2 emergency track; require PQ authentication for high-value transactions; open the §4.10 iPACT rescue paths and the §4.9 Path B preimage proof. |
 | **M4: Verifiable quantum-simulation advantage** | Independently confirmed | Assume imminent T-break; accelerate Phase 4; publish the §14 governance decision on unmigrated accounts. |
 
-Milestone assessment is performed by the cryptographic review committee (§7) with a published, dated report; the governance body (§14) authorizes the corresponding action.
+### 9.2 Non-quantum (classical / AI-accelerated) triggers
+
+A break of elliptic-curve or lattice assumptions could arrive **without any quantum hardware** — from a mathematical result (possibly AI-assisted) — and therefore **without any observable hardware precursor**. The following triggers are defined and are equally actionable with §9.1. Assessment is by the Cryptographic Review Committee (§14), with a published, dated report within 7 days of a credible claim.
+
+| **Trigger** | **Signal** | **Pre-specified IoTeX action** |
+| --- | --- | --- |
+| **C1: Faster ECDLP algorithm** | A published algorithm for secp256k1 or generic ECDLP that is sub-exponential or materially faster than Pollard-ρ (e.g. a large asymptotic improvement, or a GNFS-style advance) | Convene the CRC within 7 days; enter the §6.2 emergency track on confirmed advantage; accelerate delegate and bridge key migration to hash-based first. |
+| **C2: Sudden ECDLP record jump** | A large, out-of-trend jump in solved ECDLP bit-size on standard or challenge curves | Treat as an early C1 signal; begin a 30-day emergency preparation; re-benchmark the network's exposure. |
+| **C3: Lattice parameter downgrade** | A large downward revision of ML-DSA core-SVP cost estimates, or a practical attack on a normalized ML-DSA parameter set | Trigger the §4.11 structural-break path: migrate **high-value keys** to hash-based signatures directly (no parameter inflation); reassess user-key posture. |
+| **C4: Anomalous authorization from exposed accounts** | Unexplained authorizations or drains from accounts whose keys are known-exposed and whose owners report no activity | Immediately assume a partial break; enter the §6.2 emergency track (48-hour clock) even absent any published result. |
+
+C4 exists because, for a purely classical break, the **first observable evidence may be an attack, not an announcement**. After T-break there is no separate "hardware" signal to wait for.
+
+The governance body (§14) authorizes the corresponding action on the CRC's recommendation; for C1/C3/C4 the §6.2 emergency clock starts immediately, without waiting for a governance vote.
 
 ## 10. Emergency Track Governance
 
 Emergency powers (§6.2) are the most contentious part of any PQ migration. This IIP requires that they be:
 
-* **narrowly scoped** — limited to the specific actions in §6.2, and only on a credible M3/M4 trigger (§9);
+* **narrowly scoped** — limited to the specific actions in §6.2, and only on a credible §9.1 (M3/M4) or §9.2 (C1/C3/C4) trigger;
 * **time-limited** — any emergency hold MUST expire automatically after a fixed window unless renewed by a governance vote;
 * **subject to post-hoc review** — a public report on the use of emergency powers MUST be published within 30 days of their deactivation;
 * **structurally controlled** — executed by a guardian multisig whose composition, threshold, and rotation are published, with individual signer keys PQ-migrated first.
@@ -766,6 +904,9 @@ The single most important security consideration in this IIP is that **"rescue" 
 | --- | --- | --- | --- | --- |
 | ECDSA dual-signature registration (§4.5 Path 1) | Yes | No (forgeable by CRQC) | No | T-governance-only |
 | Kiraz–Kardas Scenario A address binding (§4.9 Path A) | Yes | No (forgeable by CRQC) | No | T-governance-only |
+| Wrapped proof verification (Groth16/PLONK over BN254, §4.9 Option 2) | Yes | No (not post-quantum) | No | T-governance-only |
+| ioTube witness signature verified via `ecrecover` (legacy path) | Yes | No (forgeable by CRQC) | No | T-governance-only |
+| Pre-staged hash-based backup key (§6.4.1), registered via a PQ-sound path | Yes | Yes | Yes — must pre-register | T-break-sound |
 | Mnemonic/seed-preimage proof (§4.9 Path B), witness = ρ | Yes | Yes, if ρ is not derivable from sk | No (but needs the mnemonic) | T-break-sound (conditional) |
 | Mnemonic/seed-preimage proof (§4.9 Path B), witness = sk | Yes | No | No | T-governance-only |
 | iPACT commitment (§4.10) | Yes | Yes | **Yes — must commit before cutoff** | T-break-sound |
@@ -781,7 +922,9 @@ NIST PQC algorithms are susceptible to side-channel attacks (power/EM analysis, 
 
 ### 12.4 Migration Proof Security
 
-zkSTARK proofs rely on the soundness of the STARK system and the quantum preimage resistance of the underlying hashes. STARKs use no trusted setup and rely only on collision-resistant hash functions, making them plausibly post-quantum secure. SP1 is STARK-native end to end, avoiding a quantum-vulnerable Groth16 final recursion. As stated in §4.9, the security of Path B depends **entirely** on the witness being a true preimage rather than `sk`.
+zkSTARK proofs rely on the soundness of the STARK system and the quantum preimage resistance of the underlying hashes. STARKs use no trusted setup and rely only on collision-resistant hash functions, making the *proof system* plausibly post-quantum secure.
+
+**However, the on-chain verifier determines the actual security (corrected in Revision 3).** Confirming the proof on-chain with SP1's Solidity verifier introduces a **Groth16/PLONK wrapping over the BN254 pairing curve**, which is not post-quantum. Consequently the migration path is post-quantum **only** if verified with a native FRI/STARK verifier (§4.9, Option 1); if the wrapped verifier is used (Option 2), the path MUST be labeled T-governance-only, because after T-break a BN254-wrapped proof could be forged. As stated in §4.9, the security of Path B also depends **entirely** on the witness being a true preimage rather than `sk`.
 
 ### 12.5 Mempool Privacy and Denial-of-Service
 
@@ -792,11 +935,19 @@ During the transition, Type `0x05` transactions that include an ECDSA signature 
 
 ### 12.6 Quantum-Safe Consensus Integrity
 
-With 24 delegates, Roll-DPoS is vulnerable if a CRQC can compromise multiple delegate keys simultaneously. Migrating all 24 delegate keys in Phase 2 eliminates this risk. During the hybrid period, the dual-signature requirement means an attacker must compromise both the ECDSA and PQ keys of a delegate to produce valid attestations. Note the inverse caveat: during hybrid, an attacker who can forge the *ECDSA* half can still impersonate a delegate's identity even if the PQ half is secure, which is why consensus PQ-only mode (Phase 2) is a required end-state and not optional.
+Consensus PQ-only mode (end of Phase 2, per §6.1) remains required to remove residual dependence on the classical half, but — because the rule requires *both* signatures, not *either* — the hybrid window never weakens the per-attestation requirement below the stronger of the two halves.
 
 ### 12.7 DePIN Device Security
 
 IoT devices often have limited compute and long lifetimes. SLH-DSA-SHA2-192s is RECOMMENDED for devices that can tolerate its 16,224-byte signature (hash-only security); ML-DSA-65 is the alternative where size is critical. For extremely constrained devices, the gateway-mediated verification model (§4.8) applies. Because device keys are long-lived, devices SHOULD also publish an iPACT (§4.10.5) at provisioning time.
+
+### 12.8 Cross-Chain Bridge Verification (new in this revision)
+
+The bridge is the one component whose compromise is immediately and fully lossy: unlike a user account (bounded loss) or consensus (where hybrid dual-signing provides a grace window), a forged bridge authorization drains the pool in a single transfer. Two consequences follow. First, the bridge has no equivalent of the §2.6 bunker defense, because witness keys must sign continuously and publicly. Second, the bridge is the strongest argument for PQ-sound verification on *foreign* chains (§4.9 Option 1): a wrapped (BN254) verifier on a remote chain is the wrong choice for the highest-value target. Until the outbound path is PQ-sound, outbound value SHOULD be capped and the timelocked admin path used (§4.14).
+
+### 12.9 Multi-Assumption Robustness (new in this revision)
+
+The Phase-2 hybrid (ECDSA + one PQ scheme) is a *floor*; **for consensus, bridge, and admin keys a cross-family PQ hybrid (lattice + hash) is REQUIRED (MUST)** (§4.1.4).
 
 ## 13. Performance Analysis and Gas Economics
 
@@ -813,7 +964,7 @@ IoT devices often have limited compute and long lifetimes. SLH-DSA-SHA2-192s is 
 
 ### 13.2 Block Size and Throughput Impact
 
-At IoTeX's current parameters, transaction-size growth reduces transactions per block substantially if block-size limits are unchanged. Mitigations: increase the block-size limit (straightforward given the 5-second block time and delegate consensus); introduce blob-style data availability for PQ signature data (EIP-4844-style); and implement STARK-based signature aggregation in later phases. Consensus-attestation bandwidth and storage are quantified in §4.7 (~700 GB/year at ML-DSA-87).
+At IoTeX's current parameters, transaction-size growth reduces transactions per block substantially if block-size limits are unchanged. Mitigations: increase the block-size limit (straightforward given the 5-second block time and delegate consensus); introduce blob-style data availability for PQ signature data (EIP-4844-style); and implement STARK-based signature aggregation in later phases. Consensus-attestation bandwidth and storage are quantified for each candidate scheme in §4.7 (~380 GB/yr for a stateful hash scheme, ~700 GB/yr for ML-DSA-87, ~2.46 TB/yr for SLH-DSA-192s).
 
 ### 13.3 Gas Cost Comparison
 
@@ -824,7 +975,8 @@ At IoTeX's current parameters, transaction-size growth reduces transactions per 
 | Simple transfer (ML-DSA-87) | N/A | ~27,000 (21,000 + 6,000) | ~27,000 |
 | Simple transfer (SLH-DSA-192s) | N/A | ~276,000 (21,000 + 255,000) | ~276,000 |
 | PQ Key Registration | N/A | ~100,000 (one-time) | N/A |
-| zkSTARK Migration Proof | N/A | ~300,000–500,000 (one-time) | N/A |
+| zkSTARK Migration Proof (wrapped verifier, Option 2) | N/A | ~300,000–500,000 (one-time) | N/A |
+| Native FRI/STARK Verification (Option 1) | N/A | to be re-benchmarked; expected higher | N/A |
 
 ### 13.4 Migration Incentives
 
@@ -840,6 +992,7 @@ Several decisions in this IIP are genuinely contentious and MUST be made explici
 * **Voting mechanism and thresholds:** phase activations, the iPACT cutoff, the re-parameterization threshold (§4.11), and any emergency action MUST specify (a) who may propose, (b) the approval threshold (e.g., delegate super-majority plus community signal), and (c) the minimum notice period.
 * **Emergency powers:** governed per §10.
 * **T-break disclosure (normative):** the network MUST publicly state that, after T-break, accounts with already-exposed public keys and no pre-committed iPACT are **not recoverable** by cryptographic means, and MUST NOT imply otherwise in any advisory or UI.
+* **Cryptographic Review Committee (CRC).** A standing committee (distinct from the 24 delegates) is established to (a) assess trigger events (§9) and publish dated reports, (b) publish the impact assessment required by §4.11, and (c) recommend emergency actions to the governance body. Its membership, independence, conflict-of-interest rules, and publication obligations MUST be defined in the governance authorization. The CRC advises; it does not hold funds or keys.
 
 ## 15. Activation and Parameters
 
@@ -847,10 +1000,13 @@ Several decisions in this IIP are genuinely contentious and MUST be made explici
 | --- | --- | --- |
 | Precompile address | `0x000000000000000000000000000000000000000B` | This IIP |
 | Precompile version byte | `0x01` | This IIP |
-| Domain tags | `IoTeX-PQ-Tx-v1`, `IoTeX-PQ-Register-v1`, `IoTeX-PQ-Consensus-v1`, `IoTeX-PQ-Addr-v1` | This IIP |
+| Domain tags | `IoTeX-PQ-Tx-v1`, `IoTeX-PQ-Register-v1`, `IoTeX-PQ-Consensus-v1`, `IoTeX-PQ-Addr-v1`, `IoTeX-PQ-Bridge-v1` | This IIP |
+| Bridge PQ migration | witness keys, admin multisig, on-chain verifier (§4.14) | ioTube maintainers / governance |
+| Pre-staged backup-key mapping | `address → backup_pq_key` (§6.4) | Governance |
 | Native-PQ address derivation | `keccak256("IoTeX-PQ-Addr-v1" || chain_id || algorithm_id || keccak256(pk))[12:32]` | This IIP |
 | PQ Key Registry address | *(to be specified at deploy)* | Governance |
-| Delegate PQ scheme | ML-DSA-87 | This IIP |
+| Delegate PQ scheme | **Cross-family hybrid (MUST):** ML-DSA-87 + (SLH-DSA-192s or XMSS) (§4.7, §4.1.4) | This IIP |
+| Hybrid key bundle | `(lattice_id, lattice_pk, hash_id, hash_pk)` bound to one address; both MUST verify (§4.5) | This IIP |
 | iPACT cutoff block | *(to be specified; set as early as possible)* | Governance (§4.10.3) |
 | Re-parameterization risk threshold | 32 bits (proposed) | Governance (§4.11) |
 | Phase activation heights | *(per phase, by fork)* | Governance (§14) |
@@ -877,7 +1033,7 @@ Each vector is a JSON object:
 }
 ```
 
-Required coverage: at least one valid and one invalid vector per active algorithm; a Type `0x05` transaction hash/preimage vector; a registry `registration_hash` vector including the `registration_nonce`; a consensus `consensus_digest` vector; and a precompile input/output vector (including a malformed-framing vector that MUST revert). **No vector in this document is fabricated**; the values above are placeholders to be filled from the reference implementation.
+and one that MUST be rejected once the cap is reached; a **bridge authorization** (`bridge_digest`) vector across two distinct routes that MUST NOT be replayable across routes.
 
 ## 17. Reference Implementation
 
@@ -890,18 +1046,95 @@ To be developed as open-source public goods (repository links MUST be added here
 * **`iotex-pq-tee-service`:** TEE proving service for mobile/IoT migration.
 * **`iotex-pq-depin-sdk`:** DePIN device identity SDK with ML-DSA/SLH-DSA support and the §4.10.6 iPACT refresh semantics.
 * **`PQVerifierLib.sol`:** migration library for contract accounts (§4.12).
+* **`iotex-stark-verifier`:** native FRI/STARK verification precompile (Option 1, §4.9) and the wrapped SP1 Solidity verifier (Option 2).
+* **`iotex-pq-consensus`:** hash-based consensus signing module (SLH-DSA/XMSS) with HSM state management (§4.7).
+* **`iotex-pq-bridge`:** ioTube PQ migration — witness-key signing in the Go relayer, the PQ verification path for the `Transfer Validator`/`MintPool`/`TokenSafe` contracts, and the native FRI/STARK verifier for remote-chain outbound verification (§4.14).
 
 ## 18. Open Questions
 
-1. **Lattice vs. hash-based posture:** should IoTeX follow the EF lean path toward hash-only signing, or keep ML-DSA primary with SLH-DSA co-primary as specified? (§1.5, §4.1, §4.13)
+1. **Consensus hash scheme:** SLH-DSA-192s (stateless, heavier) or XMSS/leanXMSS (smaller, stateful) as the Phase-1 consensus default for IoTeX's 5-second signing frequency? (§4.7)
 2. **Security-level floor:** is Category 3 the right floor, or should consensus/admin use Category 5 exclusively and user keys stay Category 2 for size? (§4.1.1)
 3. **iPACT cutoff timing:** what is the earliest block at which commitments can be reliably timestamped on both Bitcoin (OpenTimestamps) and IoTeX? (§4.10.3)
 4. **Post-break rescue at scale:** if T-break arrives before mass iPACT commitment, what (if anything) should happen to un-migrated exposed accounts? (§14)
 5. **Aggregation recall:** at what delegate-set size does STARK aggregation (leanMultisig-style) become necessary? (§4.7)
 6. **Contract-account coverage:** is a protocol-enforced PQ path for multisigs/AA acceptable, or does it violate account-owner autonomy? (§4.12)
 7. **Gas schedule finalization:** which benchmark methodology and hardware define the §4.3 constants?
+8. **Native STARK verifier:** what is the real gas cost and engineering path for a FRI/STARK verification precompile (Option 1), and does it land before T-break? (§4.9, §13.3)
+9. **BLS/IIP-52 interaction:** when does BLS aggregation get superseded, and can the attestation format be made forward-compatible now? (§3.12, §4.7)
+10. **SP 800-230 activation:** which of the limited-use sets to activate, and for which (device data-signing) roles? (§4.1.2)
+11. **Remote-chain bridge verification:** which chains can host a native FRI/STARK verifier for the bridge's outbound path, and at what gas cost — or must outbound value be capped until then? (§4.14, §12.8)
+12. **Crisis-switch activation rule:** what super-majority and timelock should gate the §6.4 crisis switch, and how is it kept reversible rather than becoming a standing governance weapon?
+13. **Straggler recovery mechanics:** is the holding-scaled PoW timer (§6.4.3) sound, given that a public break lets the attacker compute keys too, and that difficulty-scaling-by-holdings inverts the protection?
+14. **Hybrid-robust scope:** which key classes adopt a cross-family hybrid (lattice + hash), and what size/gas budget is acceptable? (§4.1.4, §12.9)
 
-## 19. Changelog (Revision 2, 2026-10-08)
+## 19. Changelog
+
+
+
+### Revision 7 (2026-10-09)
+
+Promotes the cross-family (lattice + hash) hybrid to a normative MUST for high-value keys.
+
+46. **§4.1.4:** cross-family hybrid is now a **MUST** for consensus/delegate keys, bridge witness and admin/upgrade keys, and high-value smart-contract admin keys (user keys MAY remain single-scheme).
+47. **§4.5:** the PQ Key Registry MUST store a two-key **bundle** for hybrid-required addresses, with the binding invariant applied to the bundle and both components required to verify.
+48. **§4.7:** consensus scheme is now a required lattice+hash pair (ML-DSA-87 + SLH-DSA-192s/XMSS); added the hybrid bandwidth row and the cost note; §4.1.2 ML-DSA-87 reframed as the required lattice half.
+49. Propagated to §4.14 (bridge keys MUST be hybrid), §6.1 (delegate registration), §12.9, §15 (parameters), and the Abstract.
+
+### Revision 6 (2026-10-09)
+
+Integrates the current cryptography/AI debate (Haseeb Qureshi's "Cryptographic Recovery Mode"; Lindell's hybrid-robust recommendation).
+
+42. **New §4.1.4 — Multi-Assumption (Hybrid-Robust) Signatures.** Distinguishes the classical+PQ transitional hybrid from the cross-family PQ hybrid (lattice + hash), and requires hybrid-robust constructions for high-value keys (consensus, bridge, admin).
+43. **New §6.4 — Pre-Staged Recovery Mode (proposed).** Records the proposed hash-based backup key, the pre-deployed crisis switch (with mandatory super-majority + timelock safeguards), straggler recovery, and crisis cadence; flags the holding-scaled PoW timer as contested.
+44. **New §12.9 — Multi-Assumption Robustness**; added the backup-key row to §12.2 and the mapping parameter to §15.
+45. Updated §1.5 (the "mathocalypse"/AI-cryptanalysis framing and Lindell's counter-argument) and §18 (crisis-switch, straggler, and hybrid-scope open questions).
+
+### Revision 5 (2026-10-08)
+
+Adds the cross-chain bridge (ioTube) migration, which Revision 4 did not address.
+
+38. **New §4.14 — Cross-Chain Bridge (ioTube) PQC Migration.** Specifies the three key classes to migrate (witness/validator signing keys; contract admin/upgrade keys; on-chain verification contracts), the cross-chain verification asymmetry (inbound tractable via IoTeX's precompile; outbound requires a PQ-sound verifier on the remote chain or a value cap), defense-in-depth caps, front-loaded sequencing, and route-bound domain separation.
+39. **New §12.8 — Cross-Chain Bridge Verification** and **§6.1.1 bridge sequencing**.
+40. Added the bridge to the Abstract, to the §1.2 attack classification (as the highest-value at-rest target), and to the §2.3 risk matrix (witness keys, admin/upgrade keys).
+41. Added `DOMAIN_BRIDGE` to §4.2, the bridge row to the §12.2 rescue table, a bridge guardrail to §8, the bridge parameter to §15, a bridge test vector to §16, the `iotex-pq-bridge` reference component to §17, and a remote-chain-verification open question to §18.
+
+### Revision 4 (2026-10-08)
+
+Hardening pass following an expert review and fact-check of Revision 3.
+
+**Correctness and consistency**
+30. **Inverted the §4.8 SP 800-230 mapping.** SP 800-230's limited-use sets (<=2^24 signatures per key; "not approved for general-purpose use") are now assigned to the **low-count identity/certificate** role, not to high-frequency data signing. High-count data signing now uses SLH-DSA-192f or a stateful WOTS/XMSS scheme.
+31. **Added the SP 800-230 caveat** (§4.1.2): enforceably capped, non-programmatic use only; corrected the name to "Limited-Signature Use Cases".
+32. **Reconciled the consensus "PQ-only" phase label** to the §6.1 timeline (transition at the end of Phase 2) in §4.7 and §12.6, and disambiguated the three senses of "PQ-only" (consensus / account / transaction).
+33. **Widened the §10 emergency scope** to include the §9.2 non-quantum triggers (C1/C3/C4).
+34. **Added the wrapped-verifier row to the §12.2 rescue-soundness table.**
+35. **Clarified that the consensus aggregation proof is verified with a native STARK verifier** (PQ-sound), distinct from the §4.9 on-chain contract verifier.
+36. **Labeled the §4.7 leanXMSS bandwidth row an estimate** and scoped §4.1.2's ML-DSA "primary" to lattice/user/admin.
+
+**Editorial**
+37. Fixed the stray quote in §4.9; added the BN254 ~100-bit classical-security note; renamed the §9.1 header (M1–M4); corrected §4.7 to "~1 million validators"; added the §2.3 delegate-key mitigation note; extended the §16 test-vector coverage (stateful XMSS, SP 800-230 cap).
+
+### Revision 3 (2026-10-08)
+
+Incorporates the external technical review of Revision 2.
+
+**Consensus and threat model**
+20. **Consensus is now hash-based-first** (§4.7): SLH-DSA-192s or a stateful XMSS/leanXMSS construction is the primary delegate scheme; ML-DSA-87 is demoted to fallback. Added the 5-second signing-frequency analysis and the stateful-signature state-reuse hazard, with mandatory HSM state management and disaster-recovery controls.
+21. **Added non-quantum triggers** (new §9.2, C1–C4) for classical/AI-accelerated cryptanalysis, and made the §6.2 emergency track activate on either axis. Graded the §4.11 response deadline (90 days for gradual; 7/30 days for structural events).
+22. **Revised the §4.11 substitution policy:** for high-value keys (consensus, admin, bridges/ioTube), a structural break triggers a direct assumption-family replacement to hash-based signatures rather than parameter inflation; parameter-first remains for gradual weakening and for user keys.
+
+**Correctness**
+23. **Corrected the on-chain proof-verification claim** (§4.9, §5.1, §12.4): SP1's Solidity verifier wraps the STARK in a Groth16/PLONK proof over BN254, which is not post-quantum. Specified two verifier options — native FRI/STARK (T-break-sound, higher gas) and wrapped (T-governance-only) — and required the choice to be stated and the gas to be re-benchmarked.
+24. **Added the SP 800-230 limited-use SLH-DSA parameter sets** as reserved identifiers (`0x16`–`0x1B`) for user accounts and low-frequency device certificates (§4.1.2), and split §4.8 device signing into identity/certificate signing versus high-frequency data signing.
+25. **Fixed the §12.6 contradiction:** with a both-signatures-required hybrid rule, an attacker must compromise both keys; removed the erroneous "forge the ECDSA half alone" claim.
+26. **Added the BLS/IIP-52 transition statement** (§3.12, §4.7): BLS aggregation is a classical-era compression optimization, not an end-state.
+
+**Editorial and governance**
+27. Fixed the dangling cross-references: "§3.14 rescue paths" → §4.10/§4.9; "cryptographic review committee (§7)" → Cryptographic Review Committee (§14); "§13 mempool policy" → §12.5.
+28. Defined the **Cryptographic Review Committee** in §14 and wired §4.11 and §9 to it.
+29. Added bridge/ioTube keys to the high-value-key guidance (§4.11).
+
+### Revision 2 (2026-10-08)
 
 **Blocking corrections**
 1. Reconciled the algorithm-identifier mismatch: §4.3's inline comment now matches the canonical §4.1.3 table (`0x10`/`0x11` for SLH-DSA).
